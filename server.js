@@ -1,5 +1,7 @@
 const port = process.env.PORT || 8080;
 
+//process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
 const express = require("express");
 const bodyParser = require("body-parser");
 const hbs = require("hbs");
@@ -13,11 +15,25 @@ const promises = require("./promises.js");
 const dms = require("./messaging.js");
 
 const app = express();
+const path = require("path");
+const fs = require("fs");
+const https = require("https");
+const webpush = require("web-push");
+
+var sslOptions = {
+    key: fs.readFileSync(path.resolve("./localhost-key.pem")),
+    cert: fs.readFileSync(path.resolve("./localhost.pem"))
+};
 
 var server = app.listen(port, () => {
     console.log(`Server is up on the port ${port}`);
     utils.init();
 });
+
+const vapidKeys = utils.vapidKeys;
+console.log(vapidKeys);
+
+app.locals.clientVapidKey = vapidKeys.publicKey;
 
 hbs.registerPartials(__dirname + "/views/partials");
 
@@ -32,6 +48,7 @@ app.use(
         extended: true
     })
 );
+app.use(bodyParser.json());
 
 hbs.registerHelper("port", () => {
     return port;
@@ -67,16 +84,36 @@ checkAuthentication_false = (request, response, next) => {
 
 // Login Page
 app.get("/login", (request, response) => {
+    let sessionID = request.sessionID;
+    let sessionData = JSON.parse(request.sessionStore.sessions[sessionID]);
+    var failureFlag = false;
+    var failureMessage = "";
+
+    if (sessionData.flash != undefined) {
+        failureFlag = true;
+        failureMessage = sessionData.flash.error[0];
+
+        delete sessionData["flash"];
+        var deletedError = JSON.stringify(sessionData);
+        request.sessionStore.sessions[sessionID] = deletedError;
+    }
+
     response.render("login.hbs", {
         title: "Login",
-        heading: "Log In"
+        heading: "Log In",
+        failureFlag: failureFlag,
+        failureMessage: failureMessage
     });
 });
 
 // Logout Page
 app.get("/logout", (request, response) => {
+    var user_id = request.user._id;
+
     request.logout();
+
     request.session.destroy(() => {
+        //watcher.close(user_id);
         response.clearCookie("connect.sid");
         response.redirect("/");
     });
@@ -107,8 +144,21 @@ app.get("/search", async (request, response) => {
         return;
     }
 
-    var threads = await promises.searchPromise(request.query.keyword, "thread");
-    var replies = await promises.searchPromise(request.query.keyword, "reply");
+    var threads_replies = await promises.searchPromise(
+        request.query.keyword,
+        "thread",
+        "thread_reply"
+    );
+    var replies = await promises.searchPromise(
+        request.query.keyword,
+        "reply",
+        "reply"
+    );
+    var threads = await promises.searchPromise(
+        request.query.keyword,
+        "thread",
+        "thread"
+    );
 
     var replies_thread_ids = Object.keys(_.groupBy(replies, "thread_id"));
 
@@ -116,7 +166,7 @@ app.get("/search", async (request, response) => {
 
     for (i = 0; i < replies_thread_ids.length; i++) {
         for (j = 0; j < replies.length; j++) {
-            if (replies[j]._id == replies_thread_ids[i]) {
+            if (replies[j].thread_id == replies_thread_ids[i]) {
                 exist_flag = true;
                 break;
             }
@@ -125,15 +175,17 @@ app.get("/search", async (request, response) => {
             var queried_thread = await promises.threadPromise(
                 replies_thread_ids[i]
             );
-            threads.push(queried_thread);
+            threads_replies.push(queried_thread);
         }
         exist_flag = false;
     }
 
-    response.render("forum.hbs", {
+    response.render("search.hbs", {
         title: "Search",
         heading: `Search: ${request.query.keyword}`,
-        message: threads
+        thread_reply: threads_replies,
+        thread: threads,
+        reply: replies
     });
 });
 
@@ -216,11 +268,14 @@ app.get("/user/:id", async (request, response) => {
 });
 
 // Send new direct message
-app.get("/new_dm/:id", checkAuthentication, (request, response) => {
+app.get("/new_dm/:id", checkAuthentication, async (request, response) => {
+    var user = await promises.userPromise(request.params.id);
+
     response.render("new_dm.hbs", {
         title: "Direct Message",
         heading: "Send a direct message",
-        recipient_id: request.params.id
+        recipient_id: request.params.id,
+        username: user.username
     });
 });
 
@@ -252,15 +307,26 @@ app.get("/dms", checkAuthentication, async (request, response) => {
         });
     }
 
+    let view = null;
+    let render = false;
+
+    if (Object.keys(request.query).length !== 0) {
+        view = request.query.view;
+        render = true;
+    }
+
     response.render("dms.hbs", {
         title: "DM Inbox",
         heading: "Direct Message Inbox",
         dm_id: user_id_array,
         dm_users: user_array,
-        dms: dmsByUsers
+        dms: dmsByUsers,
+        view: view,
+        render: render
     });
 });
 
+// display endpoint for messages in inbox
 app.get("/dms/:id", checkAuthentication, async (request, response) => {
     var dms = await promises.dmPromise(request.user._id.toString());
     var username = await promises.userPromise(request.params.id);
@@ -280,8 +346,50 @@ app.get("/dms/:id", checkAuthentication, async (request, response) => {
         heading: username.username,
         dms: dmsByUsers[request.params.id],
         dmers_id: request.params.id
-    }); 
+    });
 });
+
+app.get("/api/notifs", async (request, response) => {
+    if (request.isAuthenticated()) {
+        var dms = await promises.dmPromise(request.user._id.toString());
+
+        // groups array elements into {otherUser_id:[messages]} objects
+        let dmsByUsers = _.groupBy(
+            dms.map(message => {
+                message.users = message.users.filter(user => {
+                    return user !== request.user._id.toString();
+                })[0];
+                return message;
+            }),
+            "users"
+        );
+
+        response.send(dmsByUsers);
+    } else {
+        response.send({});
+    }
+});
+
+app.get("/api/vapidPublicKey", (request, response) => {
+    response.send({ key: app.locals.clientVapidKey });
+});
+
+app.post("/api/pushsubscribe", checkAuthentication, (request, response) => {
+    let user_id = request.user._id;
+    let endpoint = request.body;
+
+    promises.updateUserPromise(user_id, endpoint);
+    response.send({ status: 200 });
+});
+
+app.get(
+    "/.well-known/acme-challenge/T7witKO1ya0tj4N4NTpv5XSfC_sigKZUKJcP0-nJ6bk",
+    (req, res) => {
+        res.send(
+            "T7witKO1ya0tj4N4NTpv5XSfC_sigKZUKJcP0-nJ6bk.vUhz1OwQfK7SYm1ZIxqBsXDz_e9FYFeaaiaDPTv8tIw"
+        );
+    }
+);
 
 exports.closeServer = function() {
     server.close();

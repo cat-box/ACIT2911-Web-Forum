@@ -1,6 +1,9 @@
 const express = require("express");
-const pass = require("./passport.js");
 const utils = require("./utils");
+
+const bcrypt = require("bcrypt");
+const saltRounds = 10;
+
 
 var router = express.Router();
 
@@ -9,10 +12,10 @@ router.post("/updateUser", updateUser);
 
 module.exports = router;
 
-function saveUser(request, response) {
+async function saveUser(request, response) {
     var email = request.body.email;
     var username = request.body.username;
-    var password = request.body.password;
+    let password = await bcrypt.hash(request.body.password, saltRounds);
 
     var db = utils.getDb();
 
@@ -24,9 +27,7 @@ function saveUser(request, response) {
         .find(query)
         .toArray((err, result) => {
             if (result.length > 0) {
-                setTimeout(function() {
-                    return response.redirect("/registration");
-                }, 2500);
+                return response.redirect("/registration");
             } else if (result.length == 0) {
                 db.collection("users").insertOne(
                     {
@@ -37,11 +38,14 @@ function saveUser(request, response) {
                             showEmail: false,
                             showName: false,
                             enableNotifs: false
-                        }
+                        },
+                        subscribed_threads: [],
+                        notifications: []
                     },
                     (err, result) => {
                         if (err) {
                             response.send("Unable to register user");
+                            return;
                         }
                         response.redirect("/login");
                     }
@@ -69,7 +73,7 @@ function updateUser(request, response) {
             }
         )
         .then(() => {
-            console.log(request.session);
+            // console.log(request.session);
             response.redirect(`/user/${request.user._id.toString()}`);
         });
 }

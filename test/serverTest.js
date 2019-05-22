@@ -5,12 +5,15 @@ var should = chai.should();
 
 chai.use(chaiHttp);
 
+process.env["NODE_TLS_REJECT_UNAUTHORIZED"] = 0;
+
 describe('Testing Page Render', function() {
     // Forum Home Page
-    it('Forum test', function() {
-        chai.request('http://localhost:8080/')
+    it('Forum test', () => {
+        chai.request('https://localhost:8080/')
             .get('/')
-            .end(function(err, res){
+            .end((err, res) => {
+                // if (err) done(err);
                 res.body.should.be.a('object');
                 res.should.have.status(200);
                 res.should.be.json;
@@ -20,7 +23,7 @@ describe('Testing Page Render', function() {
     });
     // Login Page
     it('Login test', function() {
-        chai.request('http://localhost:8080/login')
+        chai.request('https://localhost:8080/login')
             .get('/login')
             .end(function(err, res){
                 res.should.have.status(200);
@@ -31,7 +34,7 @@ describe('Testing Page Render', function() {
     });
     // Logout Page
     it('Logout test', function() {
-        chai.request('http://localhost:8080/logout')
+        chai.request('https://localhost:8080/logout')
             .get('/')
             .end(function(err, res){
                 res.should.have.status(200);
@@ -40,7 +43,7 @@ describe('Testing Page Render', function() {
     });
     // Registration Test
     it('Registration test', function() {
-        chai.request('http://localhost:8080/registration')
+        chai.request('https://localhost:8080/registration')
             .get('/registration')
             .end(function(err, res){
                 res.should.have.status(200);
@@ -49,7 +52,7 @@ describe('Testing Page Render', function() {
     });
     // Search Test
     it('Search test', function() {
-        chai.request('http://localhost:8080/search')
+        chai.request('https://localhost:8080/search')
             .get('/search')
             .end(function(err, res){
                 res.should.have.status(200);
